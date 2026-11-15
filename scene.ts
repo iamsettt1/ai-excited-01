@@ -1,334 +1,375 @@
-// scene.ts — draws the one image: "The Whale That Swallowed the Sky".
-// A colossal whale breaches out of the ocean, arcing up toward a golden
-// ringed planet, while a tiny city below cheers with searchlights and
-// confetti. Surprise is the scale: the whale is bigger than the city,
-// the planet hangs close enough to touch, and the whole frame leans
-// diagonally toward one thrilling moment — the whale about to kiss the ring.
+// scene.ts — the picture itself: a colossal blue whale breaches out of a
+// night ocean and arcs diagonally up toward a giant golden ringed planet
+// hanging low in the sky, its spout streaming light toward the ring,
+// while a tiny city below cheers with searchlights and confetti under
+// aurora ribbons and stars. No text, no copied assets: every pixel is
+// drawn here from palette colours and geometry.
 
-import { Canvas } from "./raster.ts";
-import { PALETTE as P, lerp, mulberry32, type RGB } from "./palette.ts";
+import {
+  AURORA_GREEN,
+  AURORA_PINK,
+  AURORA_TEAL,
+  BEACON_CYAN,
+  BEACON_GOLD,
+  BEACON_WHITE,
+  CITY_SILHOUETTE,
+  CONFETTI,
+  FOAM,
+  PLANET_BAND,
+  PLANET_HIGH,
+  PLANET_MID,
+  PLANET_OUTER,
+  RING_BACK,
+  RING_EDGE,
+  RING_FRONT,
+  SEA_DEEP,
+  SEA_TOP,
+  SKY_LOW,
+  SKY_MID,
+  SKY_TOP,
+  SPOUT_CORE,
+  SPOUT_HALO,
+  STAR_COOL,
+  STAR_WARM,
+  STAR_WHITE,
+  WAVE_LINE,
+  WHALE_BELLY,
+  WHALE_DARK,
+  WHALE_EYE,
+  WHALE_MID,
+  WHALE_TOP,
+  WINDOW_COOL,
+  WINDOW_WARM,
+  type RGB,
+} from "./palette.ts";
+import { Canvas, rng } from "./canvas.ts";
 
-const W = 1024;
-const H = 1024;
-const HORIZON = 700;
+// --- whale path: a quadratic Bezier from tail to head -----------------
+const TAIL: [number, number] = [150, 905];
+const CTRL: [number, number] = [300, 720];
+const HEAD: [number, number] = [585, 440];
 
-function drawStars(cv: Canvas, rnd: () => number): void {
-  for (let i = 0; i < 220; i++) {
-    const x = rnd() * W;
-    const y = rnd() * 560;
-    const r = 0.6 + rnd() * 1.6;
-    const a = 0.35 + rnd() * 0.65;
-    if (rnd() < 0.12) {
-      cv.star(x, y, 4 + rnd() * 7, P.starWhite, a * 0.9);
-    } else {
-      cv.circle(x, y, r, P.starWhite, a);
-    }
-  }
-}
-
-function drawAurora(cv: Canvas): void {
-  // Three translucent ribbons rippling across the upper sky.
-  const ribbons: { y: number; amp: number; c: RGB; a: number }[] = [
-    { y: 150, amp: 46, c: P.auroraGreen, a: 0.16 },
-    { y: 235, amp: 60, c: P.auroraTeal, a: 0.14 },
-    { y: 320, amp: 52, c: P.auroraPink, a: 0.12 },
+function whalePoint(t: number): [number, number] {
+  const u = 1 - t;
+  return [
+    u * u * TAIL[0] + 2 * u * t * CTRL[0] + t * t * HEAD[0],
+    u * u * TAIL[1] + 2 * u * t * CTRL[1] + t * t * HEAD[1],
   ];
-  for (const rb of ribbons) {
-    const top: [number, number][] = [];
-    const bot: [number, number][] = [];
-    for (let x = -40; x <= W + 40; x += 32) {
-      const wave = Math.sin((x / W) * Math.PI * 2.2 + rb.y) * rb.amp;
-      top.push([x, rb.y + wave - 26]);
-      bot.push([x, rb.y + wave + 26]);
+}
+
+function whaleTangent(t: number): [number, number] {
+  const dx = 2 * (1 - t) * (CTRL[0] - TAIL[0]) + 2 * t * (HEAD[0] - CTRL[0]);
+  const dy = 2 * (1 - t) * (CTRL[1] - TAIL[1]) + 2 * t * (HEAD[1] - CTRL[1]);
+  const len = Math.hypot(dx, dy) || 1;
+  return [dx / len, dy / len];
+}
+
+// Body radius along the path: thin tail, plump middle, rounded head.
+const RADIUS_KEYS: [number, number][] = [
+  [0, 14],
+  [0.15, 34],
+  [0.35, 78],
+  [0.55, 96],
+  [0.75, 88],
+  [0.9, 66],
+  [1, 48],
+];
+
+function whaleRadius(t: number): number {
+  for (let i = 0; i + 1 < RADIUS_KEYS.length; i++) {
+    const [t0, r0] = RADIUS_KEYS[i];
+    const [t1, r1] = RADIUS_KEYS[i + 1];
+    if (t >= t0 && t <= t1) {
+      const f = (t - t0) / (t1 - t0);
+      return r0 + (r1 - r0) * f;
     }
-    cv.splineFill([...top, ...bot.reverse()], rb.c, rb.a, 8);
+  }
+  return RADIUS_KEYS[RADIUS_KEYS.length - 1][1];
+}
+
+function drawSky(c: Canvas): void {
+  c.vgrad(0, 0, 1024, 420, SKY_TOP, SKY_MID);
+  c.vgrad(0, 420, 1024, 240, SKY_MID, SKY_LOW);
+}
+
+function drawStars(c: Canvas): void {
+  const next = rng(20261116);
+  const colours: RGB[] = [STAR_WHITE, STAR_WARM, STAR_COOL];
+  for (let i = 0; i < 240; i++) {
+    const x = next() * 1024;
+    const y = next() * 620;
+    const r = 0.8 + next() * 1.6;
+    const a = 0.35 + next() * 0.65;
+    c.disc(x, y, r, colours[Math.floor(next() * colours.length)], a);
+  }
+  // A dozen bright stars with a soft halo.
+  for (let i = 0; i < 12; i++) {
+    const x = 40 + next() * 944;
+    const y = 30 + next() * 420;
+    c.glow(x, y, 9, STAR_WHITE, 0.5);
+    c.disc(x, y, 2.2, STAR_WHITE, 0.95);
   }
 }
 
-function ellipseArc(
-  cv: Canvas,
-  cx: number,
-  cy: number,
-  rx: number,
-  ry: number,
-  a0: number,
-  a1: number,
-  width: number,
-  c: RGB,
-  alpha: number,
-): void {
-  const steps = 64;
-  let px = cx + rx * Math.cos(a0);
-  let py = cy + ry * Math.sin(a0);
-  for (let i = 1; i <= steps; i++) {
-    const t = a0 + ((a1 - a0) * i) / steps;
-    const x = cx + rx * Math.cos(t);
-    const y = cy + ry * Math.sin(t);
-    cv.line(px, py, x, y, width, c, alpha);
-    px = x;
-    py = y;
+function drawAurora(c: Canvas): void {
+  // Wide, slow, faint ribbons: one gentle sine each, so they read as
+  // sky light rather than neon snakes.
+  const bands: { base: number; amp: number; wave: number; phase: number; colour: RGB }[] = [
+    { base: 95, amp: 26, wave: 560, phase: 0.0, colour: AURORA_GREEN },
+    { base: 155, amp: 30, wave: 640, phase: 1.7, colour: AURORA_TEAL },
+    { base: 210, amp: 24, wave: 520, phase: 3.4, colour: AURORA_PINK },
+  ];
+  for (const band of bands) {
+    const pts: [number, number][] = [];
+    for (let x = -40; x <= 1064; x += 40) {
+      const y = band.base + band.amp * Math.sin((x / band.wave) * Math.PI * 2 + band.phase);
+      pts.push([x, y]);
+    }
+    c.curve(pts, 44, band.colour, 0.07);
+    c.curve(pts, 16, band.colour, 0.1);
   }
 }
 
-function drawPlanet(cv: Canvas): void {
-  const cx = 762;
-  const cy = 205;
+function drawPlanet(c: Canvas): void {
+  const cx = 712;
+  const cy = 215;
   const r = 148;
-  // Back half of the ring, behind the planet.
-  ellipseArc(cv, cx, cy, 252, 62, Math.PI, Math.PI * 2, 13, P.ringPale, 0.95);
-  ellipseArc(cv, cx, cy, 252, 62, Math.PI, Math.PI * 2, 5, P.planetAmber, 0.5);
+  const rot = -0.3;
+  c.glow(cx, cy, 300, PLANET_MID, 0.3);
+  // Far half of the ring, behind the disc (the upper arc).
+  c.ellipseStroke(cx, cy, 272, 66, rot, 26, RING_BACK, 0.95, Math.PI, Math.PI * 2);
+  // The disc: rim, body, then a bright highlight offset up-left.
+  c.disc(cx, cy, r, PLANET_OUTER, 1);
+  c.disc(cx, cy, r - 6, PLANET_MID, 1);
+  // Surface bands, kept inside the disc as thin ellipses.
+  c.ellipse(cx, cy - 42, 128, 9, PLANET_BAND, 0.45, -0.12);
+  c.ellipse(cx, cy + 2, 136, 10, PLANET_BAND, 0.4, -0.12);
+  c.ellipse(cx, cy + 46, 122, 9, PLANET_BAND, 0.45, -0.12);
+  c.disc(cx - 42, cy - 40, 70, PLANET_HIGH, 0.85);
+  c.disc(cx - 54, cy - 52, 34, [255, 244, 200], 0.9);
+  // Near half of the ring, in front of the disc (the lower arc).
+  c.ellipseStroke(cx, cy, 272, 66, rot, 26, RING_FRONT, 0.98, 0, Math.PI);
+  c.ellipseStroke(cx, cy, 276, 68, rot, 7, RING_EDGE, 0.8, 0, Math.PI);
+}
 
-  // Banded disc: horizontal stripes clipped to the circle.
-  const bands: [number, RGB][] = [
-    [0.0, P.planetGold],
-    [0.16, P.planetAmber],
-    [0.3, P.planetGold],
-    [0.44, P.planetShadow],
-    [0.56, P.planetAmber],
-    [0.7, P.planetGold],
-    [0.84, P.planetShadow],
-    [1.0, P.planetGold],
-  ];
-  for (let y = cy - r; y <= cy + r; y++) {
-    const dy = y - cy;
-    const hw = Math.sqrt(Math.max(0, r * r - dy * dy));
-    const t = (y - (cy - r)) / (2 * r);
-    let c = bands[0][1];
-    for (let b = 0; b < bands.length - 1; b++) {
-      if (t >= bands[b][0] && t <= bands[b + 1][0]) {
-        c = lerp(bands[b][1], bands[b + 1][1], (t - bands[b][0]) / (bands[b + 1][0] - bands[b][0]));
-        break;
+function drawWhale(c: Canvas): void {
+  // The tail stays below the waterline, so the body starts at the sea:
+  // the whale reads as bursting out of the water at the foam below.
+  // Body: mid-blue discs along the Bezier, then a dark back stripe and a
+  // pale belly, each offset far enough along the curve's normals to peek
+  // out past the body's edge as a crescent (a stripe drawn first and
+  // fully inside the body would be invisible).
+  const inner: [number, number] = [0.7, -0.7]; // toward the sky (top-right)
+  const steps = 90;
+  for (let pass = 0; pass < 3; pass++) {
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const [x, y] = whalePoint(t);
+      const [tx, ty] = whaleTangent(t);
+      // Unit normals: n1 = (-ty, tx); pick the sky-side one by dot product.
+      const n1: [number, number] = [-ty, tx];
+      const dot = n1[0] * inner[0] + n1[1] * inner[1];
+      const sky: [number, number] = dot >= 0 ? n1 : [-n1[0], -n1[1]];
+      const sea: [number, number] = [-sky[0], -sky[1]];
+      const r = whaleRadius(t);
+      if (pass === 0) {
+        c.disc(x, y, r, WHALE_MID, 1);
+      } else if (pass === 1) {
+        c.disc(x + sky[0] * r * 0.8, y + sky[1] * r * 0.8, r * 0.24, WHALE_TOP, 1);
+      } else {
+        c.disc(x + sea[0] * r * 0.8, y + sea[1] * r * 0.8, r * 0.24, WHALE_BELLY, 0.95);
       }
     }
-    // Shade the lower-right limb so the disc reads as a sphere.
-    const shade = Math.max(0, (y - cy) / r) * 0.35;
-    const shaded: RGB = [
-      Math.round(c[0] * (1 - shade)),
-      Math.round(c[1] * (1 - shade)),
-      Math.round(c[2] * (1 - shade)),
-    ];
-    cv.fillRect(cx - hw, y, cx + hw, y, shaded);
   }
-  // Terminator glow on the upper-left limb.
-  cv.glow(cx - 60, cy - 70, 90, P.planetGold, 0.35);
 
-  // Front half of the ring, crossing in front of the planet.
-  ellipseArc(cv, cx, cy, 252, 62, 0, Math.PI, 13, P.ringPale, 0.95);
-  ellipseArc(cv, cx, cy, 252, 62, 0, Math.PI, 5, P.planetAmber, 0.5);
-  // A thin second ring for depth.
-  ellipseArc(cv, cx, cy, 282, 74, 0, Math.PI, 4, P.ringPale, 0.55);
-  ellipseArc(cv, cx, cy, 282, 74, Math.PI, Math.PI * 2, 4, P.ringPale, 0.4);
+  // No dorsal fin: on this arc the back edge's normal is near-parallel
+  // to the body, so a fin rooted there reads as a stray triangle in the
+  // foam. The whale reads cleanly without one.
+
+  // Pectoral fin sweeping down from the belly.
+  const [px, py] = whalePoint(0.75);
+  c.ellipse(px - 8, py + 62, 78, 20, WHALE_DARK, 1, 0.85);
+
+  // Eye with a glint, mouth curve, blowhole.
+  c.disc(556, 466, 7, WHALE_EYE, 1);
+  c.disc(558, 464, 2.5, [255, 255, 255], 0.95);
+  c.curve(
+    [
+      [545, 502],
+      [568, 514],
+      [592, 492],
+    ],
+    4,
+    WHALE_DARK,
+    0.7,
+  );
+  c.line(512, 440, 530, 434, 4, WHALE_DARK, 0.7);
+
+  // Spout: light streaming from the blowhole up to the planet's ring.
+  const spoutFrom: [number, number] = [528, 438];
+  const spoutEnds: [number, number][] = [
+    [660, 300],
+    [690, 270],
+    [720, 250],
+    [745, 285],
+    [770, 320],
+    [640, 330],
+  ];
+  c.glow(spoutFrom[0], spoutFrom[1], 60, SPOUT_HALO, 0.5);
+  for (const [ex, ey] of spoutEnds) {
+    const mid: [number, number] = [(spoutFrom[0] + ex) / 2 - 30, (spoutFrom[1] + ey) / 2 - 40];
+    c.curve([spoutFrom, mid, [ex, ey]], 12, SPOUT_HALO, 0.18);
+    c.curve([spoutFrom, mid, [ex, ey]], 4, SPOUT_CORE, 0.9);
+  }
+  // Droplets riding the spout.
+  const next = rng(77);
+  for (let i = 0; i < 30; i++) {
+    const end = spoutEnds[Math.floor(next() * spoutEnds.length)];
+    const t = 0.25 + next() * 0.7;
+    const x = spoutFrom[0] + (end[0] - spoutFrom[0]) * t + (next() - 0.5) * 46;
+    const y = spoutFrom[1] + (end[1] - spoutFrom[1]) * t - 30 * t + (next() - 0.5) * 30;
+    c.disc(x, y, 1.5 + next() * 3.5, SPOUT_CORE, 0.9);
+  }
+  // Burst of light where the spout meets the ring.
+  c.glow(712, 300, 90, [255, 220, 130], 0.35);
 }
 
-function drawOcean(cv: Canvas, rnd: () => number): void {
-  cv.vgrad(0, HORIZON, W, H, [
-    [0, P.oceanTop],
-    [0.35, P.oceanDeep],
-    [1, [2, 12, 30]],
-  ]);
-  // Rolling swell lines, brighter near the horizon.
-  for (let i = 0; i < 9; i++) {
-    const y = HORIZON + 26 + i * 34;
-    const amp = 8 + rnd() * 10;
+function drawSea(c: Canvas): void {
+  c.vgrad(0, 660, 1024, 364, SEA_TOP, SEA_DEEP);
+  // A warm glow on the horizon where the sky meets the sea.
+  c.glow(512, 660, 420, [255, 150, 80], 0.12);
+  // Long wave strokes, fading as they sink.
+  const next = rng(4242);
+  for (let row = 0; row < 4; row++) {
+    const yBase = 705 + row * 72;
     const pts: [number, number][] = [];
-    for (let x = -20; x <= W + 20; x += 24) {
-      pts.push([x, y + Math.sin((x / W) * Math.PI * 3 + i * 1.7) * amp]);
+    for (let x = -20; x <= 1044; x += 36) {
+      pts.push([x, yBase + 8 * Math.sin(x / 130 + row * 1.3)]);
     }
-    for (let s = 0; s < pts.length - 1; s++) {
-      cv.line(pts[s][0], pts[s][1], pts[s + 1][0], pts[s + 1][1], 3, P.splash, 0.1 + 0.06 * (1 - i / 9));
-    }
+    c.curve(pts, 3, WAVE_LINE, 0.5 - row * 0.08);
+  }
+  // A few glints where the planet's light touches the water.
+  for (let i = 0; i < 14; i++) {
+    const x = 560 + next() * 360;
+    const y = 690 + next() * 130;
+    c.ellipse(x, y, 12 + next() * 22, 3, [255, 200, 110], 0.28);
   }
 }
 
-function drawCity(cv: Canvas, rnd: () => number): void {
-  // Tiny dark skyline along the horizon, warm windows, searchlights.
-  let x = 24;
-  while (x < W - 30) {
-    const bw = 26 + rnd() * 42;
-    const bh = 22 + rnd() * 62;
-    cv.fillRect(x, HORIZON - bh, x + bw, HORIZON, P.cityDark);
-    // Rooftop antenna on some towers.
-    if (rnd() < 0.4) cv.line(x + bw / 2, HORIZON - bh, x + bw / 2, HORIZON - bh - 16, 2, P.cityDark, 1);
-    // Lit windows.
-    const cols = Math.max(1, Math.floor(bw / 12));
-    const rows = Math.max(1, Math.floor(bh / 16));
-    for (let cx = 0; cx < cols; cx++) {
-      for (let cy = 0; cy < rows; cy++) {
-        if (rnd() < 0.55) {
-          const wx = x + 5 + cx * 12;
-          const wy = HORIZON - bh + 6 + cy * 16;
-          cv.fillRect(wx, wy, wx + 4, wy + 6, rnd() < 0.75 ? P.windowWarm : P.windowCool, 0.95);
+function drawSplash(c: Canvas): void {
+  // The breach: one foam ring where the whale leaves the water, plus
+  // chaotic spray instead of a second tidy ring.
+  const [bx, by] = whalePoint(0.6);
+  c.ellipseStroke(bx, by + 6, 122, 26, 0, 15, FOAM, 0.65);
+  const next = rng(99);
+  for (let i = 0; i < 64; i++) {
+    const x = bx - 140 + next() * 280;
+    const y = by - 60 + next() * 90;
+    c.disc(x, y, 1.5 + next() * 5, next() < 0.6 ? FOAM : SPOUT_CORE, 0.85);
+  }
+  for (let i = 0; i < 14; i++) {
+    const x = bx - 120 + next() * 240;
+    c.disc(x, by - 65 - next() * 60, 2 + next() * 3, FOAM, 0.9);
+  }
+}
+
+function drawCity(c: Canvas): void {
+  const next = rng(2026);
+  let x = 0;
+  while (x < 1024) {
+    const w = 34 + Math.floor(next() * 58);
+    const h = 34 + Math.floor(next() * 78);
+    const top = 1024 - h;
+    c.rect(x, top, w, h, CITY_SILHOUETTE, 1);
+    // Lit windows: a sparse warm/cool grid.
+    for (let wy = top + 8; wy < 1012; wy += 13) {
+      for (let wx = x + 6; wx < x + w - 6; wx += 11) {
+        if (next() < 0.34) {
+          c.rect(wx, wy, 4, 6, next() < 0.75 ? WINDOW_WARM : WINDOW_COOL, 0.95);
         }
       }
     }
-    x += bw + 4 + rnd() * 10;
+    // Rooftop antenna on the taller blocks.
+    if (h > 82) {
+      c.line(x + w / 2, top, x + w / 2, top - 16, 2, CITY_SILHOUETTE, 1);
+      c.disc(x + w / 2, top - 18, 2.5, [255, 70, 70], 0.95);
+    }
+    x += w + Math.floor(next() * 8);
   }
-  // Searchlight beams leaning up toward the whale.
-  const beams: [number, number, number][] = [
-    [140, -70, 0.13],
-    [330, -40, 0.11],
-    [880, 55, 0.13],
-    [700, 30, 0.1],
+}
+
+function drawSearchlights(c: Canvas): void {
+  const bases: [number, number, RGB][] = [
+    [180, 948, BEACON_WHITE],
+    [520, 936, BEACON_GOLD],
+    [860, 952, BEACON_CYAN],
   ];
-  for (const [bx, tilt, a] of beams) {
-    const topX = bx + tilt;
-    cv.polyFill(
+  const aims: [number, number][] = [
+    [420, 420],
+    [585, 430],
+    [700, 330],
+  ];
+  for (let i = 0; i < bases.length; i++) {
+    const [bx, by, colour] = bases[i];
+    const [ax, ay] = aims[i];
+    // A soft translucent cone from the rooftop toward the whale.
+    const dx = ax - bx;
+    const dy = ay - by;
+    const len = Math.hypot(dx, dy);
+    const nx = -dy / len;
+    const ny = dx / len;
+    const spread = 46;
+    c.poly(
       [
-        [bx - 7, HORIZON],
-        [bx + 7, HORIZON],
-        [topX + 34, 150],
-        [topX - 34, 150],
+        [bx, by],
+        [ax + nx * spread, ay + ny * spread],
+        [ax - nx * spread, ay - ny * spread],
       ],
-      P.windowWarm,
-      a,
+      colour,
+      0.1,
     );
+    c.line(bx, by, ax, ay, 5, colour, 0.22);
+    c.glow(bx, by, 26, colour, 0.6);
   }
-  // Confetti bursting above the rooftops.
-  const confetti: RGB[] = [P.windowWarm, P.auroraPink, P.auroraGreen, P.auroraTeal, P.planetGold];
+}
+
+function drawConfetti(c: Canvas): void {
+  const next = rng(5150);
   for (let i = 0; i < 150; i++) {
-    const cx = rnd() * W;
-    const cy = HORIZON - 30 - rnd() * 180;
-    const c = confetti[Math.floor(rnd() * confetti.length)];
-    cv.fillRect(cx, cy, cx + 3 + rnd() * 3, cy + 2 + rnd() * 3, c, 0.9);
+    const x = 40 + next() * 944;
+    const y = 470 + next() * 450;
+    const s = 3 + next() * 4;
+    const colour = CONFETTI[Math.floor(next() * CONFETTI.length)];
+    if (next() < 0.5) {
+      c.rect(x, y, s, s * 0.6, colour, 0.9);
+    } else {
+      c.disc(x, y, s / 2, colour, 0.9);
+    }
+  }
+  // A denser burst of confetti right under the whale's head, where the
+  // crowd is cheering loudest.
+  for (let i = 0; i < 40; i++) {
+    const x = 430 + next() * 260;
+    const y = 520 + next() * 180;
+    const s = 3 + next() * 5;
+    c.disc(x, y, s / 2, CONFETTI[Math.floor(next() * CONFETTI.length)], 0.95);
   }
 }
 
-function drawWhale(cv: Canvas): void {
-  // Body outline, tail at lower-left in the spray, head up-right by the planet.
-  const body: [number, number][] = [
-    [238, 826], // tail notch
-    [180, 856], // upper fluke tip, spread wide so the tail reads
-    [252, 884], // fluke inner
-    [286, 838], // tail stock top
-    [330, 760],
-    [420, 640],
-    [520, 520],
-    [620, 420],
-    [688, 348], // head top
-    [742, 322], // snout
-    [758, 352], // snout tip
-    [736, 402], // jaw
-    [672, 470],
-    [580, 580],
-    [480, 690],
-    [380, 792],
-    [318, 852], // tail stock bottom
-    [268, 884], // lower fluke inner
-    [196, 916], // lower fluke tip, spread wide so the tail reads
-  ];
-  // Back gradient is faked with layered fills: deep back, then mid, then belly.
-  cv.splineFill(body, P.whaleBack, 1);
-  // Mid-body sheen, same outline shrunk toward the spine.
-  const mid: [number, number][] = body.map(([x, y]) => {
-    const t = (x - 200) / 560;
-    return [x + 26 - t * 10, y + 30] as [number, number];
-  });
-  cv.splineFill(mid, P.whaleMid, 0.85);
-  // Pale belly patch along the lower edge.
-  const belly: [number, number][] = [
-    [330, 800],
-    [420, 700],
-    [520, 600],
-    [620, 500],
-    [700, 420],
-    [724, 392],
-    [690, 440],
-    [600, 540],
-    [500, 650],
-    [400, 760],
-    [350, 812],
-  ];
-  cv.splineFill(belly, P.whaleBelly, 0.9);
-  // Throat grooves: three curved lines on the belly.
-  for (let g = 0; g < 3; g++) {
-    const off = g * 16;
-    cv.line(430 + off, 690 - off * 0.4, 640 + off, 470 - off * 0.4, 3, P.whaleBack, 0.35);
-  }
-  // Pectoral fin, swept back and slim so it reads as a fin, not a blotch.
-  cv.splineFill(
-    [
-      [505, 588],
-      [575, 648],
-      [548, 706],
-      [492, 668],
-      [488, 618],
-    ],
-    P.whaleBack,
-    1,
-  );
-  // Eye: bright, looking up at the planet.
-  cv.circle(700, 372, 11, [255, 255, 255], 1);
-  cv.circle(703, 370, 6, [8, 10, 30], 1);
-  cv.circle(705, 368, 2, [255, 255, 255], 1);
-  // Smile line along the jaw.
-  cv.line(700, 396, 742, 372, 3, P.whaleBack, 0.7);
-  // Blowhole spout: a fountain of light arcing toward the planet.
-  cv.glow(700, 320, 60, P.whaleGlow, 0.5);
-  for (let i = 0; i < 14; i++) {
-    const t = i / 13;
-    const sx = 700 + t * 46 - t * t * 30;
-    const sy = 322 - t * 120 - Math.sin(t * Math.PI) * 18;
-    cv.circle(sx, sy, 7 - t * 4, P.splash, 0.85 - t * 0.4);
-  }
-  // Motion streaks trailing the body — speed lines.
-  const streaks: [number, number, number, number][] = [
-    [300, 700, 180, 790],
-    [380, 600, 250, 700],
-    [470, 500, 350, 610],
-    [560, 400, 450, 510],
-    [640, 330, 540, 430],
-  ];
-  for (const [x0, y0, x1, y1] of streaks) {
-    cv.line(x0, y0, x1, y1, 5, P.whaleGlow, 0.28);
-  }
-}
-
-function drawSplash(cv: Canvas, rnd: () => number): void {
-  // Exploding spray where the tail leaves the water.
-  const cx = 268;
-  const cy = 852;
-  cv.glow(cx, cy, 130, P.splash, 0.4);
-  for (let i = 0; i < 46; i++) {
-    const ang = Math.PI + rnd() * Math.PI; // upward fan
-    const dist = 20 + rnd() * 150;
-    const dx = cx + Math.cos(ang) * dist * 1.4;
-    const dy = cy + Math.sin(ang) * dist * 0.85 - rnd() * 30;
-    const r = 2 + rnd() * 7;
-    cv.circle(dx, dy, r, rnd() < 0.7 ? P.splash : P.foam, 0.75 + rnd() * 0.25);
-  }
-  // Foam ring on the water surface around the tail.
-  for (let i = 0; i < 26; i++) {
-    const x = 150 + rnd() * 260;
-    const y = HORIZON + 6 + rnd() * 26;
-    cv.ellipse(x, y, 8 + rnd() * 22, 3 + rnd() * 5, P.foam, 0.5 + rnd() * 0.3);
-  }
-  // Big arcing spray sheets on both sides of the tail.
-  ellipseArc(cv, cx - 40, cy - 10, 120, 70, Math.PI * 0.9, Math.PI * 1.7, 9, P.splash, 0.6);
-  ellipseArc(cv, cx + 60, cy - 6, 110, 64, Math.PI * 1.3, Math.PI * 1.95, 8, P.foam, 0.55);
-}
-
+/** Draw the whole scene onto a fresh canvas and return it. */
 export function drawScene(): Canvas {
-  const cv = new Canvas(W, H);
-  const rnd = mulberry32(20261116);
-
-  // Sky: deep indigo at the top, magenta low, warm glow at the horizon.
-  cv.vgrad(0, 0, W, HORIZON, [
-    [0, P.skyTop],
-    [0.45, P.skyMid],
-    [0.78, P.skyLow],
-    [1, P.horizon],
-  ]);
-  drawStars(cv, rnd);
-  drawAurora(cv);
-  cv.glow(762, 205, 260, P.planetGold, 0.22);
-  drawPlanet(cv);
-  drawOcean(cv, rnd);
-  drawCity(cv, rnd);
-  drawSplash(cv, rnd);
-  drawWhale(cv);
-  // Final kiss of light where the snout nearly touches the ring.
-  cv.glow(745, 330, 70, P.windowWarm, 0.5);
-  cv.star(748, 322, 16, P.starWhite, 0.95);
-  cv.vignette(0.2);
-  return cv;
+  const c = new Canvas();
+  drawSky(c);
+  drawStars(c);
+  drawAurora(c);
+  drawPlanet(c);
+  drawWhale(c);
+  // The opaque sea covers the whale below the waterline, so only the
+  // breaching arc shows — the foam at the crossing sells the emergence.
+  drawSea(c);
+  drawSplash(c);
+  drawCity(c);
+  drawSearchlights(c);
+  drawConfetti(c);
+  return c;
 }
