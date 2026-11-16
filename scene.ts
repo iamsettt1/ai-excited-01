@@ -1,375 +1,380 @@
-// scene.ts — the picture itself: a colossal blue whale breaches out of a
-// night ocean and arcs diagonally up toward a giant golden ringed planet
-// hanging low in the sky, its spout streaming light toward the ring,
-// while a tiny city below cheers with searchlights and confetti under
-// aurora ribbons and stars. No text, no copied assets: every pixel is
-// drawn here from palette colours and geometry.
+// scene.ts — the whole picture, drawn procedurally: a whale breaching out of a
+// glowing night ocean toward a giant golden ringed planet in a starry sky.
+// Colours are bold and warm against deep blue; the whale's arc is the focal moment.
 
-import {
-  AURORA_GREEN,
-  AURORA_PINK,
-  AURORA_TEAL,
-  BEACON_CYAN,
-  BEACON_GOLD,
-  BEACON_WHITE,
-  CITY_SILHOUETTE,
-  CONFETTI,
-  FOAM,
-  PLANET_BAND,
-  PLANET_HIGH,
-  PLANET_MID,
-  PLANET_OUTER,
-  RING_BACK,
-  RING_EDGE,
-  RING_FRONT,
-  SEA_DEEP,
-  SEA_TOP,
-  SKY_LOW,
-  SKY_MID,
-  SKY_TOP,
-  SPOUT_CORE,
-  SPOUT_HALO,
-  STAR_COOL,
-  STAR_WARM,
-  STAR_WHITE,
-  WAVE_LINE,
-  WHALE_BELLY,
-  WHALE_DARK,
-  WHALE_EYE,
-  WHALE_MID,
-  WHALE_TOP,
-  WINDOW_COOL,
-  WINDOW_WARM,
-  type RGB,
-} from "./palette.ts";
-import { Canvas, rng } from "./canvas.ts";
+import { Img, mulberry32, rgb, mix, clamp, type RGB } from "./pixels.ts";
 
-// --- whale path: a quadratic Bezier from tail to head -----------------
-const TAIL: [number, number] = [150, 905];
-const CTRL: [number, number] = [300, 720];
-const HEAD: [number, number] = [585, 440];
+const W = 1024;
+const H = 1024;
+const WATERLINE = 660;
 
-function whalePoint(t: number): [number, number] {
-  const u = 1 - t;
-  return [
-    u * u * TAIL[0] + 2 * u * t * CTRL[0] + t * t * HEAD[0],
-    u * u * TAIL[1] + 2 * u * t * CTRL[1] + t * t * HEAD[1],
+const DEEP_SKY: RGB = rgb(7, 11, 40);
+const VIOLET: RGB = rgb(43, 26, 99);
+const MAGENTA: RGB = rgb(122, 45, 126);
+const CORAL: RGB = rgb(232, 93, 117);
+const GOLD: RGB = rgb(255, 201, 92);
+const GOLD_DEEP: RGB = rgb(198, 122, 32);
+const GOLD_PALE: RGB = rgb(255, 233, 168);
+const SEA_TOP: RGB = rgb(46, 230, 200);
+const SEA_MID: RGB = rgb(10, 127, 138);
+const SEA_DEEP: RGB = rgb(4, 40, 63);
+const WHALE_BACK: RGB = rgb(32, 80, 143);
+const WHALE_SIDE: RGB = rgb(47, 127, 196);
+const BELLY: RGB = rgb(207, 238, 247);
+const FOAM: RGB = rgb(235, 252, 250);
+const WHITE: RGB = rgb(255, 255, 255);
+
+function drawSky(img: Img, rnd: () => number): void {
+  img.vgrad(0, WATERLINE, [
+    [0, DEEP_SKY],
+    [0.45, VIOLET],
+    [0.62, MAGENTA],
+    [1, CORAL],
+  ]);
+
+  // Soft out-of-focus lights drifting in the sky, for depth.
+  for (let i = 0; i < 14; i++) {
+    const x = rnd() * W;
+    const y = rnd() * 560;
+    const r = 8 + rnd() * 20;
+    const c = [GOLD, SEA_TOP, CORAL, rgb(150, 120, 255)][i % 4]!;
+    img.glow(x, y, r, c, 0.1 + rnd() * 0.1);
+  }
+
+  // Stars: dense, varied, only above the waterline.
+  for (let i = 0; i < 380; i++) {
+    const x = rnd() * W;
+    const y = rnd() * 620;
+    const b = 0.35 + rnd() * 0.65;
+    const s = rnd();
+    const c: RGB = s < 0.7 ? rgb(255, 255, 255) : s < 0.85 ? GOLD_PALE : rgb(170, 220, 255);
+    const r = rnd() < 0.12 ? 2.2 : 1.1;
+    img.disc(x, y, r, c, b);
+    if (rnd() < 0.06) {
+      // A few four-point sparkles.
+      img.line(x - 7, y, x + 7, y, 1.4, c, b * 0.8);
+      img.line(x, y - 7, x, y + 7, 1.4, c, b * 0.8);
+    }
+  }
+
+  // Two shooting stars, bright heads with fading trails.
+  const shots: Array<[number, number, number]> = [
+    [180, 120, 150],
+    [880, 90, 120],
   ];
+  for (const [sx, sy, len] of shots) {
+    for (let i = 0; i < len; i += 6) {
+      const t = i / len;
+      img.disc(sx + i, sy + i * 0.45, 2.2 * (1 - t) + 0.6, WHITE, 0.9 * (1 - t));
+    }
+    img.glow(sx, sy, 14, WHITE, 0.7);
+  }
 }
 
-function whaleTangent(t: number): [number, number] {
-  const dx = 2 * (1 - t) * (CTRL[0] - TAIL[0]) + 2 * t * (HEAD[0] - CTRL[0]);
-  const dy = 2 * (1 - t) * (CTRL[1] - TAIL[1]) + 2 * t * (HEAD[1] - CTRL[1]);
-  const len = Math.hypot(dx, dy) || 1;
-  return [dx / len, dy / len];
-}
+function drawPlanet(img: Img): void {
+  const cx = 700;
+  const cy = 235;
+  const r = 180;
 
-// Body radius along the path: thin tail, plump middle, rounded head.
-const RADIUS_KEYS: [number, number][] = [
-  [0, 14],
-  [0.15, 34],
-  [0.35, 78],
-  [0.55, 96],
-  [0.75, 88],
-  [0.9, 66],
-  [1, 48],
-];
+  // Halo first, so the planet sits inside its own light.
+  img.glow(cx, cy, 320, GOLD, 0.5);
+  img.glow(cx, cy, 210, GOLD_PALE, 0.55);
 
-function whaleRadius(t: number): number {
-  for (let i = 0; i + 1 < RADIUS_KEYS.length; i++) {
-    const [t0, r0] = RADIUS_KEYS[i];
-    const [t1, r1] = RADIUS_KEYS[i + 1];
-    if (t >= t0 && t <= t1) {
-      const f = (t - t0) / (t1 - t0);
-      return r0 + (r1 - r0) * f;
+  // Back half of the ring (the part that passes behind the planet).
+  const tilt = -0.28; // radians, ring tilted up to the right
+  const rx = 330;
+  const ry = 74;
+  const ringPoint = (deg: number): [number, number] => {
+    const a = (deg * Math.PI) / 180;
+    const px = rx * Math.cos(a);
+    const py = ry * Math.sin(a);
+    return [
+      cx + px * Math.cos(tilt) - py * Math.sin(tilt),
+      cy + px * Math.sin(tilt) + py * Math.cos(tilt),
+    ];
+  };
+  for (let d = 180; d <= 360; d += 2) {
+    const [x, y] = ringPoint(d);
+    img.disc(x, y, 13, GOLD, 0.5);
+  }
+  for (let d = 180; d <= 360; d += 2) {
+    const [x, y] = ringPoint(d);
+    img.disc(x, y, 4, GOLD_PALE, 0.55);
+  }
+
+  // The planet itself: gold gradient, darker bands, bright upper-left face.
+  for (let y = cy - r; y <= cy + r; y++) {
+    const dy = (y - cy) / r;
+    const half = r * Math.sqrt(Math.max(0, 1 - dy * dy));
+    const t = (y - (cy - r)) / (2 * r);
+    const base = mix(GOLD_PALE, GOLD_DEEP, clamp(t * 1.15, 0, 1));
+    for (let x = Math.floor(cx - half); x <= Math.ceil(cx + half); x++) {
+      img.set(x, y, base);
     }
   }
-  return RADIUS_KEYS[RADIUS_KEYS.length - 1][1];
-}
-
-function drawSky(c: Canvas): void {
-  c.vgrad(0, 0, 1024, 420, SKY_TOP, SKY_MID);
-  c.vgrad(0, 420, 1024, 240, SKY_MID, SKY_LOW);
-}
-
-function drawStars(c: Canvas): void {
-  const next = rng(20261116);
-  const colours: RGB[] = [STAR_WHITE, STAR_WARM, STAR_COOL];
-  for (let i = 0; i < 240; i++) {
-    const x = next() * 1024;
-    const y = next() * 620;
-    const r = 0.8 + next() * 1.6;
-    const a = 0.35 + next() * 0.65;
-    c.disc(x, y, r, colours[Math.floor(next() * colours.length)], a);
-  }
-  // A dozen bright stars with a soft halo.
-  for (let i = 0; i < 12; i++) {
-    const x = 40 + next() * 944;
-    const y = 30 + next() * 420;
-    c.glow(x, y, 9, STAR_WHITE, 0.5);
-    c.disc(x, y, 2.2, STAR_WHITE, 0.95);
-  }
-}
-
-function drawAurora(c: Canvas): void {
-  // Wide, slow, faint ribbons: one gentle sine each, so they read as
-  // sky light rather than neon snakes.
-  const bands: { base: number; amp: number; wave: number; phase: number; colour: RGB }[] = [
-    { base: 95, amp: 26, wave: 560, phase: 0.0, colour: AURORA_GREEN },
-    { base: 155, amp: 30, wave: 640, phase: 1.7, colour: AURORA_TEAL },
-    { base: 210, amp: 24, wave: 520, phase: 3.4, colour: AURORA_PINK },
+  // Horizontal bands, clipped to the disc by their chord width.
+  const bands: Array<[number, RGB, number]> = [
+    [-120, GOLD_DEEP, 0.3],
+    [-70, GOLD, 0.35],
+    [-18, GOLD_DEEP, 0.28],
+    [38, GOLD_PALE, 0.3],
+    [95, GOLD_DEEP, 0.32],
+    [140, GOLD, 0.3],
   ];
-  for (const band of bands) {
-    const pts: [number, number][] = [];
-    for (let x = -40; x <= 1064; x += 40) {
-      const y = band.base + band.amp * Math.sin((x / band.wave) * Math.PI * 2 + band.phase);
-      pts.push([x, y]);
-    }
-    c.curve(pts, 44, band.colour, 0.07);
-    c.curve(pts, 16, band.colour, 0.1);
+  for (const [dy, c, a] of bands) {
+    const half = r * Math.sqrt(Math.max(0, 1 - (dy / r) ** 2));
+    img.ellipse(cx, cy + dy, half, 8, c, a);
+  }
+  // Sunlit rim on the upper-left edge.
+  for (let d = 195; d <= 330; d += 2) {
+    const a = (d * Math.PI) / 180;
+    img.disc(cx + (r - 3) * Math.cos(a), cy + (r - 3) * Math.sin(a), 5, GOLD_PALE, 0.85);
+  }
+  // A small crater-like dimple for character, upper right.
+  img.ellipse(cx + 78, cy - 66, 26, 15, GOLD_DEEP, 0.25);
+  img.ellipse(cx - 96, cy + 84, 18, 10, GOLD_DEEP, 0.22);
+
+  // Front half of the ring, crossing in front of the planet's lower edge.
+  for (let d = 0; d <= 180; d += 2) {
+    const [x, y] = ringPoint(d);
+    img.disc(x, y, 13, GOLD, 0.62);
+  }
+  for (let d = 0; d <= 180; d += 2) {
+    const [x, y] = ringPoint(d);
+    img.disc(x, y, 4, rgb(255, 244, 200), 0.7);
+  }
+  // Thin outer ring, fainter.
+  for (let d = 0; d <= 360; d += 2) {
+    const a = (d * Math.PI) / 180;
+    const px = (rx + 30) * Math.cos(a);
+    const py = (ry + 12) * Math.sin(a);
+    const x = cx + px * Math.cos(tilt) - py * Math.sin(tilt);
+    const y = cy + px * Math.sin(tilt) + py * Math.cos(tilt);
+    img.disc(x, y, 2.5, GOLD_PALE, 0.35);
   }
 }
 
-function drawPlanet(c: Canvas): void {
-  const cx = 712;
-  const cy = 215;
-  const r = 148;
-  const rot = -0.3;
-  c.glow(cx, cy, 300, PLANET_MID, 0.3);
-  // Far half of the ring, behind the disc (the upper arc).
-  c.ellipseStroke(cx, cy, 272, 66, rot, 26, RING_BACK, 0.95, Math.PI, Math.PI * 2);
-  // The disc: rim, body, then a bright highlight offset up-left.
-  c.disc(cx, cy, r, PLANET_OUTER, 1);
-  c.disc(cx, cy, r - 6, PLANET_MID, 1);
-  // Surface bands, kept inside the disc as thin ellipses.
-  c.ellipse(cx, cy - 42, 128, 9, PLANET_BAND, 0.45, -0.12);
-  c.ellipse(cx, cy + 2, 136, 10, PLANET_BAND, 0.4, -0.12);
-  c.ellipse(cx, cy + 46, 122, 9, PLANET_BAND, 0.45, -0.12);
-  c.disc(cx - 42, cy - 40, 70, PLANET_HIGH, 0.85);
-  c.disc(cx - 54, cy - 52, 34, [255, 244, 200], 0.9);
-  // Near half of the ring, in front of the disc (the lower arc).
-  c.ellipseStroke(cx, cy, 272, 66, rot, 26, RING_FRONT, 0.98, 0, Math.PI);
-  c.ellipseStroke(cx, cy, 276, 68, rot, 7, RING_EDGE, 0.8, 0, Math.PI);
-}
+function drawOcean(img: Img, rnd: () => number): void {
+  img.vgrad(WATERLINE, H, [
+    [0, SEA_TOP],
+    [0.25, SEA_MID],
+    [1, SEA_DEEP],
+  ]);
 
-function drawWhale(c: Canvas): void {
-  // The tail stays below the waterline, so the body starts at the sea:
-  // the whale reads as bursting out of the water at the foam below.
-  // Body: mid-blue discs along the Bezier, then a dark back stripe and a
-  // pale belly, each offset far enough along the curve's normals to peek
-  // out past the body's edge as a crescent (a stripe drawn first and
-  // fully inside the body would be invisible).
-  const inner: [number, number] = [0.7, -0.7]; // toward the sky (top-right)
-  const steps = 90;
-  for (let pass = 0; pass < 3; pass++) {
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const [x, y] = whalePoint(t);
-      const [tx, ty] = whaleTangent(t);
-      // Unit normals: n1 = (-ty, tx); pick the sky-side one by dot product.
-      const n1: [number, number] = [-ty, tx];
-      const dot = n1[0] * inner[0] + n1[1] * inner[1];
-      const sky: [number, number] = dot >= 0 ? n1 : [-n1[0], -n1[1]];
-      const sea: [number, number] = [-sky[0], -sky[1]];
-      const r = whaleRadius(t);
-      if (pass === 0) {
-        c.disc(x, y, r, WHALE_MID, 1);
-      } else if (pass === 1) {
-        c.disc(x + sky[0] * r * 0.8, y + sky[1] * r * 0.8, r * 0.24, WHALE_TOP, 1);
-      } else {
-        c.disc(x + sea[0] * r * 0.8, y + sea[1] * r * 0.8, r * 0.24, WHALE_BELLY, 0.95);
-      }
+  // Rolling wave layers, each a sine band with a foam crest.
+  for (let k = 0; k < 3; k++) {
+    const yBase = WATERLINE + 46 + k * 92;
+    const amp = 16 - k * 3;
+    const pts: Array<[number, number]> = [];
+    for (let x = 0; x <= W; x += 16) {
+      pts.push([x, yBase + amp * Math.sin(x * 0.011 + k * 1.9)]);
+    }
+    pts.push([W, H]);
+    pts.push([0, H]);
+    img.poly(pts, k === 0 ? SEA_MID : SEA_DEEP, k === 0 ? 0.35 : 0.45);
+    // Foam crest along the top edge of the wave (overlapping discs = solid line).
+    for (let x = 0; x <= W; x += 6) {
+      const y = yBase + amp * Math.sin(x * 0.011 + k * 1.9);
+      img.disc(x, y, 4, FOAM, 0.35 + 0.2 * Math.sin(x * 0.05 + k));
     }
   }
 
-  // No dorsal fin: on this arc the back edge's normal is near-parallel
-  // to the body, so a fin rooted there reads as a stray triangle in the
-  // foam. The whale reads cleanly without one.
+  // Glowing surface line where the sky meets the sea.
+  img.line(0, WATERLINE, W, WATERLINE, 5, rgb(140, 255, 230), 0.8);
+  img.line(0, WATERLINE + 4, W, WATERLINE + 4, 2, WHITE, 0.5);
 
-  // Pectoral fin sweeping down from the belly.
-  const [px, py] = whalePoint(0.75);
-  c.ellipse(px - 8, py + 62, 78, 20, WHALE_DARK, 1, 0.85);
+  // A few glints scattered on the water.
+  for (let i = 0; i < 60; i++) {
+    const x = rnd() * W;
+    const y = WATERLINE + 20 + rnd() * (H - WATERLINE - 40);
+    img.disc(x, y, 1.5 + rnd() * 2, rgb(190, 255, 240), 0.25 + rnd() * 0.3);
+  }
+}
 
-  // Eye with a glint, mouth curve, blowhole.
-  c.disc(556, 466, 7, WHALE_EYE, 1);
-  c.disc(558, 464, 2.5, [255, 255, 255], 0.95);
-  c.curve(
+/** Sample a quadratic spine: points, unit normals (pointing down-left), widths. */
+function spineSamples(): Array<{ x: number; y: number; nx: number; ny: number; w: number }> {
+  const p0: [number, number] = [392, 724];
+  const p1: [number, number] = [462, 540];
+  const p2: [number, number] = [668, 352];
+  const out: Array<{ x: number; y: number; nx: number; ny: number; w: number }> = [];
+  const steps = 40;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = Img.quad(p0, p1, p2, t);
+    // Derivative of the quadratic, for the normal.
+    const dx = 2 * (1 - t) * (p1[0] - p0[0]) + 2 * t * (p2[0] - p1[0]);
+    const dy = 2 * (1 - t) * (p1[1] - p0[1]) + 2 * t * (p2[1] - p1[1]);
+    const len = Math.hypot(dx, dy) || 1;
+    // Normal (-dy, dx): choose the sign that points downward (belly side).
+    let nx = -dy / len;
+    let ny = dx / len;
+    if (ny < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    const width = 46 + 56 * Math.sin(Math.PI * (0.12 + 0.88 * t)) ** 0.8;
+    out.push({ x, y, nx, ny, w: width });
+  }
+  return out;
+}
+
+function drawWhale(img: Img, rnd: () => number): void {
+  const s = spineSamples();
+  const head = s[s.length - 1]!;
+  const tail = s[0]!;
+
+  // Glow where the whale leaves the water, and a light shaft up to the planet.
+  img.glow(430, 690, 260, rgb(120, 240, 220), 0.45);
+  img.glow(560, 480, 200, GOLD_PALE, 0.22);
+
+  // Tail flukes: two swept fins behind the tail stock.
+  const tx = tail.x;
+  const ty = tail.y;
+  img.poly(
     [
-      [545, 502],
-      [568, 514],
-      [592, 492],
+      [tx, ty],
+      [tx - 118, ty + 66],
+      [tx - 132, ty + 22],
+      [tx - 30, ty - 26],
     ],
-    4,
-    WHALE_DARK,
-    0.7,
+    WHALE_BACK,
   );
-  c.line(512, 440, 530, 434, 4, WHALE_DARK, 0.7);
+  img.poly(
+    [
+      [tx, ty],
+      [tx - 96, ty - 92],
+      [tx - 128, ty - 58],
+      [tx - 26, ty + 18],
+    ],
+    WHALE_SIDE,
+  );
 
-  // Spout: light streaming from the blowhole up to the planet's ring.
-  const spoutFrom: [number, number] = [528, 438];
-  const spoutEnds: [number, number][] = [
-    [660, 300],
-    [690, 270],
-    [720, 250],
-    [745, 285],
-    [770, 320],
-    [640, 330],
-  ];
-  c.glow(spoutFrom[0], spoutFrom[1], 60, SPOUT_HALO, 0.5);
-  for (const [ex, ey] of spoutEnds) {
-    const mid: [number, number] = [(spoutFrom[0] + ex) / 2 - 30, (spoutFrom[1] + ey) / 2 - 40];
-    c.curve([spoutFrom, mid, [ex, ey]], 12, SPOUT_HALO, 0.18);
-    c.curve([spoutFrom, mid, [ex, ey]], 4, SPOUT_CORE, 0.9);
+  // Body: a tapered band along the spine.
+  const left: Array<[number, number]> = [];
+  const right: Array<[number, number]> = [];
+  for (const p of s) {
+    left.push([p.x - p.nx * p.w * 0.5, p.y - p.ny * p.w * 0.5]);
+    right.push([p.x + p.nx * p.w * 0.5, p.y + p.ny * p.w * 0.5]);
   }
-  // Droplets riding the spout.
-  const next = rng(77);
-  for (let i = 0; i < 30; i++) {
-    const end = spoutEnds[Math.floor(next() * spoutEnds.length)];
-    const t = 0.25 + next() * 0.7;
-    const x = spoutFrom[0] + (end[0] - spoutFrom[0]) * t + (next() - 0.5) * 46;
-    const y = spoutFrom[1] + (end[1] - spoutFrom[1]) * t - 30 * t + (next() - 0.5) * 30;
-    c.disc(x, y, 1.5 + next() * 3.5, SPOUT_CORE, 0.9);
+  img.poly([...left, ...right.reverse()], WHALE_BACK);
+  // Lighter flank stripe along the upper side.
+  const flankTop: Array<[number, number]> = [];
+  const flankBottom: Array<[number, number]> = [];
+  for (const p of s) {
+    flankTop.push([p.x - p.nx * p.w * 0.52, p.y - p.ny * p.w * 0.52]);
+    flankBottom.push([p.x - p.nx * p.w * 0.1, p.y - p.ny * p.w * 0.1]);
   }
-  // Burst of light where the spout meets the ring.
-  c.glow(712, 300, 90, [255, 220, 130], 0.35);
-}
-
-function drawSea(c: Canvas): void {
-  c.vgrad(0, 660, 1024, 364, SEA_TOP, SEA_DEEP);
-  // A warm glow on the horizon where the sky meets the sea.
-  c.glow(512, 660, 420, [255, 150, 80], 0.12);
-  // Long wave strokes, fading as they sink.
-  const next = rng(4242);
-  for (let row = 0; row < 4; row++) {
-    const yBase = 705 + row * 72;
-    const pts: [number, number][] = [];
-    for (let x = -20; x <= 1044; x += 36) {
-      pts.push([x, yBase + 8 * Math.sin(x / 130 + row * 1.3)]);
-    }
-    c.curve(pts, 3, WAVE_LINE, 0.5 - row * 0.08);
+  img.poly([...flankTop, ...flankBottom.reverse()], WHALE_SIDE, 0.85);
+  // Pale belly on the underside.
+  const bellyTop: Array<[number, number]> = [];
+  const bellyBottom: Array<[number, number]> = [];
+  for (const p of s) {
+    bellyTop.push([p.x + p.nx * p.w * 0.08, p.y + p.ny * p.w * 0.08]);
+    bellyBottom.push([p.x + p.nx * p.w * 0.5, p.y + p.ny * p.w * 0.5]);
   }
-  // A few glints where the planet's light touches the water.
-  for (let i = 0; i < 14; i++) {
-    const x = 560 + next() * 360;
-    const y = 690 + next() * 130;
-    c.ellipse(x, y, 12 + next() * 22, 3, [255, 200, 110], 0.28);
-  }
-}
-
-function drawSplash(c: Canvas): void {
-  // The breach: one foam ring where the whale leaves the water, plus
-  // chaotic spray instead of a second tidy ring.
-  const [bx, by] = whalePoint(0.6);
-  c.ellipseStroke(bx, by + 6, 122, 26, 0, 15, FOAM, 0.65);
-  const next = rng(99);
-  for (let i = 0; i < 64; i++) {
-    const x = bx - 140 + next() * 280;
-    const y = by - 60 + next() * 90;
-    c.disc(x, y, 1.5 + next() * 5, next() < 0.6 ? FOAM : SPOUT_CORE, 0.85);
-  }
-  for (let i = 0; i < 14; i++) {
-    const x = bx - 120 + next() * 240;
-    c.disc(x, by - 65 - next() * 60, 2 + next() * 3, FOAM, 0.9);
-  }
-}
-
-function drawCity(c: Canvas): void {
-  const next = rng(2026);
-  let x = 0;
-  while (x < 1024) {
-    const w = 34 + Math.floor(next() * 58);
-    const h = 34 + Math.floor(next() * 78);
-    const top = 1024 - h;
-    c.rect(x, top, w, h, CITY_SILHOUETTE, 1);
-    // Lit windows: a sparse warm/cool grid.
-    for (let wy = top + 8; wy < 1012; wy += 13) {
-      for (let wx = x + 6; wx < x + w - 6; wx += 11) {
-        if (next() < 0.34) {
-          c.rect(wx, wy, 4, 6, next() < 0.75 ? WINDOW_WARM : WINDOW_COOL, 0.95);
-        }
-      }
-    }
-    // Rooftop antenna on the taller blocks.
-    if (h > 82) {
-      c.line(x + w / 2, top, x + w / 2, top - 16, 2, CITY_SILHOUETTE, 1);
-      c.disc(x + w / 2, top - 18, 2.5, [255, 70, 70], 0.95);
-    }
-    x += w + Math.floor(next() * 8);
-  }
-}
-
-function drawSearchlights(c: Canvas): void {
-  const bases: [number, number, RGB][] = [
-    [180, 948, BEACON_WHITE],
-    [520, 936, BEACON_GOLD],
-    [860, 952, BEACON_CYAN],
-  ];
-  const aims: [number, number][] = [
-    [420, 420],
-    [585, 430],
-    [700, 330],
-  ];
-  for (let i = 0; i < bases.length; i++) {
-    const [bx, by, colour] = bases[i];
-    const [ax, ay] = aims[i];
-    // A soft translucent cone from the rooftop toward the whale.
-    const dx = ax - bx;
-    const dy = ay - by;
-    const len = Math.hypot(dx, dy);
-    const nx = -dy / len;
-    const ny = dx / len;
-    const spread = 46;
-    c.poly(
-      [
-        [bx, by],
-        [ax + nx * spread, ay + ny * spread],
-        [ax - nx * spread, ay - ny * spread],
-      ],
-      colour,
-      0.1,
+  img.poly([...bellyTop, ...bellyBottom.reverse()], BELLY, 0.95);
+  // Throat grooves: three short arcs across the belly near the head.
+  for (let g = 0; g < 3; g++) {
+    const p = s[30 + g * 2]!;
+    img.line(
+      p.x + p.nx * p.w * 0.12 - p.nx * 0,
+      p.y + p.ny * p.w * 0.12,
+      p.x + p.nx * p.w * 0.48,
+      p.y + p.ny * p.w * 0.48,
+      3,
+      rgb(150, 190, 210),
+      0.7,
     );
-    c.line(bx, by, ax, ay, 5, colour, 0.22);
-    c.glow(bx, by, 26, colour, 0.6);
   }
-}
 
-function drawConfetti(c: Canvas): void {
-  const next = rng(5150);
-  for (let i = 0; i < 150; i++) {
-    const x = 40 + next() * 944;
-    const y = 470 + next() * 450;
-    const s = 3 + next() * 4;
-    const colour = CONFETTI[Math.floor(next() * CONFETTI.length)];
-    if (next() < 0.5) {
-      c.rect(x, y, s, s * 0.6, colour, 0.9);
-    } else {
-      c.disc(x, y, s / 2, colour, 0.9);
+  // Pectoral fin sweeping back down-left.
+  const mid = s[22]!;
+  img.poly(
+    [
+      [mid.x + mid.nx * mid.w * 0.3, mid.y + mid.ny * mid.w * 0.3],
+      [mid.x - 30, mid.y + 150],
+      [mid.x + 42, mid.y + 128],
+      [mid.x + mid.nx * mid.w * 0.45, mid.y + mid.ny * mid.w * 0.45],
+    ],
+    WHALE_BACK,
+  );
+
+  // Eye: dark bead with a bright glint, looking up at the planet.
+  const eyeX = head.x - 14;
+  const eyeY = head.y - 20;
+  img.disc(eyeX, eyeY, 9, rgb(8, 12, 28));
+  img.disc(eyeX - 3, eyeY - 3, 3.5, WHITE);
+  // Joyful open smile.
+  img.curve([head.x - 34, head.y + 6], [head.x - 6, head.y + 26], [head.x + 30, head.y + 2], 6, rgb(10, 20, 44), 0.9);
+
+  // Spout: a fan of bright droplets streaming from the blowhole toward the ring.
+  const bx = head.x - 26;
+  const by = head.y - 34;
+  img.glow(bx, by - 40, 70, rgb(200, 245, 255), 0.6);
+  for (let jet = 0; jet < 3; jet++) {
+    const spread = [-28, 0, 28][jet]!;
+    for (let i = 0; i < 16; i++) {
+      const t = i / 16;
+      const x = bx + spread * t + 8 * Math.sin(t * 9 + jet);
+      const y = by - 130 * t - 20 * t * t;
+      img.disc(x, y, 5.5 * (1 - t) + 1.5, FOAM, 0.95 * (1 - t * 0.6));
     }
   }
-  // A denser burst of confetti right under the whale's head, where the
-  // crowd is cheering loudest.
-  for (let i = 0; i < 40; i++) {
-    const x = 430 + next() * 260;
-    const y = 520 + next() * 180;
-    const s = 3 + next() * 5;
-    c.disc(x, y, s / 2, CONFETTI[Math.floor(next() * CONFETTI.length)], 0.95);
+
+  // Speed lines trailing behind the whale, for momentum.
+  const trails: Array<[[number, number], [number, number], [number, number]]> = [
+    [[330, 760], [250, 700], [180, 640]],
+    [[360, 800], [270, 760], [200, 720]],
+    [[300, 700], [230, 620], [170, 540]],
+  ];
+  for (const [a, b, c] of trails) img.curve(a, b, c, 5, WHITE, 0.45);
+
+  // Spray droplets flung around the breach.
+  for (let i = 0; i < 90; i++) {
+    const a = rnd() * Math.PI * 2;
+    const d = 30 + rnd() * 190;
+    const x = 430 + Math.cos(a) * d * 1.1;
+    const y = 660 + Math.sin(a) * d * 0.55 - rnd() * 60;
+    img.disc(x, y, 1.5 + rnd() * 4, i % 3 === 0 ? GOLD_PALE : FOAM, 0.5 + rnd() * 0.45);
   }
 }
 
-/** Draw the whole scene onto a fresh canvas and return it. */
-export function drawScene(): Canvas {
-  const c = new Canvas();
-  drawSky(c);
-  drawStars(c);
-  drawAurora(c);
-  drawPlanet(c);
-  drawWhale(c);
-  // The opaque sea covers the whale below the waterline, so only the
-  // breaching arc shows — the foam at the crossing sells the emergence.
-  drawSea(c);
-  drawSplash(c);
-  drawCity(c);
-  drawSearchlights(c);
-  drawConfetti(c);
-  return c;
+function drawSplash(img: Img, rnd: () => number): void {
+  // Foam crown where the whale tore out of the water.
+  const cx = 415;
+  const cy = 672;
+  for (const [r, a] of [
+    [58, 0.9],
+    [92, 0.7],
+    [128, 0.5],
+  ] as Array<[number, number]>) {
+    for (let d = 200; d <= 340; d += 3) {
+      const ang = (d * Math.PI) / 180;
+      img.disc(cx + r * Math.cos(ang), cy + r * Math.sin(ang) * 0.55, 7, FOAM, a);
+    }
+  }
+  // Chunky foam blobs at the waterline.
+  for (let i = 0; i < 26; i++) {
+    const x = cx - 150 + rnd() * 300;
+    const y = cy - 14 + rnd() * 26;
+    img.disc(x, y, 8 + rnd() * 16, FOAM, 0.55 + rnd() * 0.4);
+  }
+  for (let i = 0; i < 40; i++) {
+    const x = cx - 170 + rnd() * 340;
+    const y = cy - 70 + rnd() * 50;
+    img.disc(x, y, 2 + rnd() * 4, FOAM, 0.6 + rnd() * 0.35);
+  }
+}
+
+/** Render the full 1024x1024 scene. Fully deterministic. */
+export function renderScene(): Img {
+  const img = new Img(W, H);
+  const rnd = mulberry32(20261115);
+  drawSky(img, rnd);
+  drawPlanet(img);
+  drawOcean(img, rnd);
+  drawWhale(img, rnd);
+  drawSplash(img, rnd);
+  img.vignette(0.18);
+  return img;
 }

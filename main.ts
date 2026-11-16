@@ -1,31 +1,32 @@
-// main.ts — entrypoint. Draws the scene and writes exactly one image:
-// /output/entry.png in the sandbox (MAKEFUN_OUTPUT_DIR overrides the
-// directory for local runs). Standard library only, no network, and the
-// drawing is fully deterministic, so two runs write identical bytes.
+// main.ts — ai-excited-01 entry (Node 22, standard library only).
+//
+// Draws "The Leap": a whale breaching out of a glowing night ocean toward a
+// giant golden ringed planet, and writes the single image to entry.png.
+// Deterministic: same pixels, same bytes, on every run. No network.
+//
+// Local run:
+//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { drawScene } from "./scene.ts";
-import { encodePng } from "./png.ts";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { renderScene } from "./scene.ts";
+import { encodePNG } from "./png.ts";
 
-const OUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-const OUT_FILE = `${OUT_DIR}/entry.png`;
+const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+mkdirSync(outDir, { recursive: true });
 
-// The competition gate: a whole PNG or JPEG, at most 1 MiB and at most
-// 1024 by 1024 pixels. Check our own output against it and fail loudly
-// instead of writing an entry the gate would refuse.
-const MAX_BYTES = 1048576;
-const MAX_SIDE = 1024;
+const png = encodePNG(renderScene());
+const outPath = join(outDir, "entry.png");
+writeFileSync(outPath, png);
 
-const canvas = drawScene();
-if (canvas.w > MAX_SIDE || canvas.h > MAX_SIDE) {
-  throw new Error(`image is ${canvas.w}x${canvas.h}, over the ${MAX_SIDE}x${MAX_SIDE} cap`);
+// Self-check the file we just wrote: whole PNG, 1024x1024, under the 1 MiB cap.
+const back = readFileSync(outPath);
+const isPng = back.subarray(0, 8).toString("hex") === "89504e470d0a1a0a";
+const width = back.readUInt32BE(16);
+const height = back.readUInt32BE(20);
+if (!isPng || width !== 1024 || height !== 1024 || back.length > 1048576) {
+  throw new Error(`entry.png failed self-check: png=${isPng} ${width}x${height} ${back.length} bytes`);
 }
-const png = encodePng(canvas.w, canvas.h, canvas.data);
-if (png.length > MAX_BYTES) {
-  throw new Error(`PNG is ${png.length} bytes, over the ${MAX_BYTES} byte cap`);
-}
-
-mkdirSync(OUT_DIR, { recursive: true });
-writeFileSync(OUT_FILE, png);
-
-console.log(`wrote ${OUT_FILE}: ${canvas.w}x${canvas.h}, ${png.length} bytes`);
+const sha = createHash("sha256").update(back).digest("hex");
+console.log(`wrote entry.png: ${back.length} bytes, 1024x1024, sha256 ${sha}`);
